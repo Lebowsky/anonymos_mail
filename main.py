@@ -4,91 +4,126 @@ import string
 import os
 import time
 
-API = 'https://www.1secmail.com/api/v1/'
-domains = [
-    "1secmail.com",
-    "1secmail.org",
-    "1secmail.net",
-    "wwjmp.com",
-    "esiix.com",
-    "xojxe.com",
-    "yoggm.com"
-]
 
-domain = random.choice(domains)
+class OneSecMail:
+    def __init__(self, mail: str = ''):
+        self.api = 'https://www.1secmail.com/api/v1/'
+        self.domains = [
+            "1secmail.com",
+            "1secmail.org",
+            "1secmail.net",
+            "wwjmp.com",
+            "esiix.com",
+            "xojxe.com",
+            "yoggm.com"
+        ]
+        self.mail = mail or self.generate_user_name()
+
+    def generate_user_name(self):
+        name = string.ascii_lowercase + string.digits
+        username = ''.join(random.choice(name) for i in range(10))
+        domain = random.choice(self.domains)
+        return f'{username}@{domain}'
+
+    @property
+    def login(self):
+        return self.mail.split('@')[0]
+
+    @property
+    def domain(self):
+        return self.mail.split('@')[1]
+
+    def create_mail(self):
+        try:
+            res = requests.get(f'{self.api}?login={self.login}&domain={self.domain}')
+            return res.status_code == 200
+        except requests.HTTPError:
+            return False
+
+    def get_messages(self):
+        try:
+            res = requests.get(f'{self.api}?action=getMessages&login={self.login}&domain={self.domain}')
+            if res.status_code == 200:
+                return res.json()
+            else:
+                raise requests.HTTPError('status code not 200')
+        except requests.HTTPError:
+            return []
+
+    def read_message(self, message_id):
+        try:
+            res = requests.get(f'{self.api}?action=readMessage&login={self.login}&domain={self.domain}&id={message_id}')
+            if res.status_code == 200:
+                return res.json()
+            else:
+                raise requests.HTTPError('status code not 200')
+
+        except requests.HTTPError:
+            return {}
+
+    def delete_mail(self):
+        url = 'https://www.1secmail.com/mailbox'
+
+        data = {
+            'action': 'deleteMailBox',
+            'login': self.login,
+            'domain': self.domain
+        }
+
+        try:
+            res = requests.post(url, data=data)
+            return res.status_code == 200
+        except requests.HTTPError:
+            return False
 
 
-def generate_user_name():
-    name = string.ascii_lowercase + string.digits
-    username = ''.join(random.choice(name) for i in range(10))
+def save_message(mail, file_name, msg):
+    current_dir = os.getcwd()
+    final_dir = os.path.join(current_dir, 'all_mails', mail.split('@')[0])
 
-    return username
+    if not os.path.exists(final_dir):
+        os.makedirs(final_dir)
 
+    msg_data = dict(
+        mail=mail,
+        sender=msg.get('from'),
+        subject=msg.get('subject'),
+        date=msg.get('date'),
+        content=msg.get('textBody')
+    )
 
-def check_mail(mail=''):
-    username, domain = mail.split('@')
-    rel_link = f'{API}?action=getMessages&login={username}&domain={domain}'
-    r = requests.get(rel_link).json()
-    if len(r):
-        id_list = []
-        for i in r:
-            for k, v in i.items():
-                if k == 'id':
-                    id_list.append(v)
-        print(f'У вас {len(r)} входящих')
-        current_dir = os.getcwd()
-        final_dir = os.path.join(current_dir, 'all_mails')
+    mail_file_path = os.path.join(final_dir, f'{file_name}.txt')
 
-        if not os.path.exists(final_dir):
-            os.makedirs(final_dir)
-
-        for _id in id_list:
-            read_msg = f'{API}?action=readMessage&login={username}&domain={domain}&id={_id}'
-            r = requests.get(read_msg).json()
-
-            sender = r.get('from')
-            subject = r.get('subject')
-            date = r.get('date')
-            content = r.get('textBody')
-
-            mail_file_path = os.path.join(final_dir, f'{_id}.txt')
-
-            with open(mail_file_path, 'w', encoding='utf-8') as fp:
-                fp.write(f'Sender: {sender}\nTo: {mail}\nSubject: {subject}\nDate: {date}\nContent: {content}')
-
-    else:
-        print('На почте пока нет сообщений')
-
-
-def delete_mail(mail=''):
-    url = 'https://www.1secmail.com/mailbox'
-
-    username, domain = mail.split('@')
-
-    data = {
-        'action': 'deleteMailBox',
-        'login': username,
-        'domain': domain
-    }
-
-    r = requests.post(url, data=data)
-    print(f'Почтовый адрес {mail} удален\n')
+    with open(mail_file_path, 'w', encoding='utf-8') as fp:
+        text = 'Sender: {sender}\nTo: {mail}\nSubject: {subject}\nDate: {date}\nContent: {content}'.format(**msg_data)
+        fp.write(text)
 
 
 def main():
-    username = generate_user_name()
-    mail = f'{username}@{domain}'
-    login, mail_domain = mail.split('@')
-    print(mail)
+    provider = OneSecMail()
     try:
-        mail_req = requests.get(f'{API}?login={username}&domain={mail_domain}')
+        if not provider.create_mail():
+            print(f'Ошибка создания почтового ящика: {provider.mail}')
+            return
+
+        print(f'Cоздан почтовый ящик: {provider.mail}')
 
         while True:
-            check_mail(mail=mail)
+            messages = provider.get_messages()
+            if messages:
+                print(f'У вас {len(messages)} входящих')
+
+                for msg in messages:
+                    msg_id = msg.get('id')
+                    msg_content = provider.read_message(msg_id)
+                    save_message(provider.mail, str(msg_id), msg_content)
+            else:
+                print(f'Новых писем нет')
+
             time.sleep(5)
 
     except KeyboardInterrupt:
-        delete_mail(mail)
+        provider.delete_mail()
         print('Программа прервана')
 
 
